@@ -1,0 +1,913 @@
+---
+title: "Brainspan_vs_NullDistributions"
+author: "Dylan Hughes"
+date: "2023-08-23"
+output: html_document
+---
+
+```{r}
+knitr::asis_output(paste0("Last run:  ", date()))
+```
+
+
+```{r, include = F}
+library(knitr)
+knitr::opts_chunk$set(message = F)
+knitr::opts_chunk$set(warning = F)
+
+
+library(dplyr)
+library(ggplot2)
+library(conflicted)
+conflict_prefer('lmer', 'lmerTest')
+conflict_prefer('recode', 'dplyr')
+conflict_prefer('filter','dplyr')
+
+
+library(devtools)
+devtools::document('~/Documents/GitHub/dylanfuncs/dylanfuncs')
+library(lmerTest)
+library(gt)
+library(corrplot)
+
+pullModNum <- function(x, first) {
+  for (i in c(2:length(x))) {
+    split = strsplit(x[i], split = '')[[1]]
+    num = as.numeric(split[(length(split)-1):length(split)])
+    num.paste = paste(num[!is.na(num)], collapse = '')
+    x[i] = paste('M', num.paste, collapse = '', sep = '')
+  }
+  
+  final <- c(first, x[2:length(x)])
+  return(final)
+}
+```
+
+```{r, echo = F}
+plotActualOnNull <- function(module, nulls, observed, snpcounts, numsnp = T) {
+  pgsLab = substr(snpcounts$V1[1], 1, which(strsplit(snpcounts$V1[1], split = '')[[1]] == "_") - 1)
+  
+  if (grepl("EUR", pgsLab)) {
+    pop = "EUR"
+  } else if (grepl("AMR", pgsLab)) {
+    pop = "AMR"
+  } else if (grepl("AFR", pgsLab)) {
+    pop = "AFR"
+  } else {
+    stop("Error with plotActualOnNull func: no population identifier in snpcount file")
+  }
+  
+  if (grepl("02", pgsLab)) {
+    find = paste0(pop, "02")
+  } else {
+    find = pop
+  }
+  
+  pgs = sub(find, "", pgsLab)
+  
+  pgsLab = paste0(pgs, pop)
+  
+  if (numsnp == T) {
+    title = paste0(pgsLab, ", ", module, ", # snps = ", snpcounts$V2[which(snpcounts$V3 == module)])
+  } else {
+    title = paste0(pgsLab, ", ", module)
+  }
+  
+  plot <- ggplot(nulls[[module]], aes(x = PQB.Beta)) + 
+    geom_histogram() + 
+    geom_vline(xintercept = observed$z.pqb[which(rownames(observed) == module)], color = 'red') +
+    ggtitle(title)
+  return(plot)
+}
+
+loopModuleNulls <- function(nulls, observed, snpcounts, numsnp = T) {
+  mods <- names(nulls)
+  std = 8.740959
+  
+  pvals = rep(NA, length(mods))
+  names(pvals) = mods
+  
+  for (m in mods) {
+    nulls[[m]]$PQB.Beta = nulls[[m]]$PQB.Beta/std
+    plot <- plotActualOnNull(module = m, nulls = nulls, observed = observed, snpcounts = snpcounts, numsnp = numsnp)
+    
+    observed.eff = observed$z.pqb[rownames(observed)==m]
+    median.null = median(nulls[[m]]$PQB.Beta)
+    #diff = abs(abs(median.null) - abs(observed.eff))
+    
+    # if (median.null < 0) {
+    #   low.tail = length(which(nulls[[m]]$PQB.Beta < (median.null - diff)))
+    # } else if (median.null > 0) {
+    #   high.tail = length(which(nulls[[m]]$PQB.Beta > (median.null + diff)))
+    # }
+    if (observed.eff < 0) {
+      tail = length(which(nulls[[m]]$PQB.Beta < observed.eff))
+    } else if (observed.eff > 0) {
+      tail = length(which(nulls[[m]]$PQB.Beta > observed.eff))
+    }
+    
+    
+   
+    pval = tail/10000
+    
+    midpt.x = (median.null + max(nulls[[m]]$PQB.Beta)) / 2
+  
+    final.plot <- plot + 
+      annotate("text", y = 700, x = midpt.x, label = paste0('1-sided p = ', pval)) + 
+      xlab("STD Beta") + 
+      ylab("Count")
+    print(final.plot)
+    
+    pvals[which(mods==m)] = pval
+  }
+  
+  return(pvals)
+}
+
+competitiveP <- function(nulls, observed) {
+  
+  mods = names(nulls)
+  
+  compP = rep(NA,length(mods))
+  
+  for (mod in mods) {
+    observedP = observed$peas$z.pqb[which(rownames(observed$peas) == mod)]
+    df = nulls[[mod]]
+    compP[which(mods == mod)] = (length(which(df$PQB.P < observedP)) + 1) / (nrow(df) + 1)
+  }
+  names(compP) = mods
+  return(compP)
+}
+
+readNulls <- function(pgs, pop) {
+  nulls = list()
+  for (mod in paste0('M', 1:18)) {
+    file = paste0('~/Documents/ple_attention/brainspan_permutation_pipeline/', pgs,'_Results/vsBrainspanSNPs/', pop,'/phi02_refCorrected/', mod, '_', pgs, pop, '02Results_BrainspanSNPs.csv')
+  
+    if (file.exists(file)) {
+      nulls[[mod]] = read.csv(file)
+    }
+  }
+  
+  return(nulls)
+}
+
+readsnpCounts <- function(pgs, pop) {
+  
+  if (paste0(pgs, pop) %in% c("ADHDEUR", "CPEUR")) {
+    file = paste0('~/Documents/abcd/genetics/PGS/', pgs,'/',pop,'/',pgs,pop,'_Brainspan_SNPcounts.csv')  
+  } else {
+    file = paste0('~/Documents/abcd/genetics/PGS/', pgs,'/',pop,'/',pgs,pop,'02_Brainspan_SNPcounts.csv')
+  }
+  
+  if (file.exists(file)) {
+    out = read.csv(file)
+  } else {
+    stop(paste0("Could not find file: ", file))
+  }
+  
+  return(out)
+}
+
+```
+
+```{r, warning=F, echo = F, message=FALSE}
+master <- read.csv('~/Documents/ple_attention/data/masterSheet_20240127.csv') %>%
+  mutate(time.point = dplyr::recode(eventname, "baseline_year_1_arm_1" = 0, "1_year_follow_up_y_arm_1" = 1, "2_year_follow_up_y_arm_1" = 2, "3_year_follow_up_y_arm_1" = 3, "4_year_follow_up_y_arm_1" = 4))
+
+master$rel_family_id = as.factor(master$rel_family_id)
+master$site_id_l = as.factor(master$site_id_l)
+master$z.pqb = as.numeric(scale(master$DistressScoreSum))
+
+cognitive.vars = c('iiv_composite_zscore')
+all.dvs = c(cognitive.vars, 'z.pqb')
+short.dvs = substr(all.dvs, start = 1, stop = 15)
+
+pgs = c('z.ADHDEUR.prscs.pgs','z.ADHDAMR02.prscs.pgs','z.ADHDAFR02.prscs.pgs',
+        'z.CPEUR.prscs.pgs','z.CPAMR02.prscs.pgs','z.CPAFR02.prscs.pgs',
+        'z.SCZEUR02.prscs.pgs','z.SCZAMR02.prscs.pgs','z.SCZAFR02.prscs.pgs', 
+        'z.NDVEUR02.prscs.pgs','z.NDVAMR02.prscs.pgs','z.NDVAFR02.prscs.pgs')
+
+covariates.simple = c("PC1","PC2","PC3","PC4","PC5",'interview_age_new','demo_sex_v2','(1|site_id_l/rel_family_id/subjectkey)')
+
+covariates.full = c("PC1","PC2","PC3","PC4","PC5",'interview_age_new','demo_sex_v2','parentalEducation_new','income_recode','(1|site_id_l/rel_family_id/subjectkey)')
+
+std = sd(master$DistressScoreSum, na.rm=T)
+```
+
+
+# Brainspan ADHD. 
+
+### Reading in null distributions (10k permutations) and superimposing observed effects
+Red vertical line indicates observed effect. Outcome of both permutations and observed effects is PQB.  
+Value printed to the right of distribution represents the p-value of the permutation i.e., the proportion of values that are less than the observed effect (or greater than depending on the position of the observed effect relative to the median of the distribution). 
+
+
+### EUR
+
+```{r, include = F}
+all.dvs <- all.dvs
+adhdbrain.pgs <- colnames(select(master, z.ADHDEUR.prscs.pgs, contains('z.ADHDEUR_M')))
+row.names=pullModNum(x = adhdbrain.pgs, first = "FG-ADHD")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+adhdbrainspan.eur <- loopModThroughVars(dvs = all.dvs, ivs = adhdbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+
+#write.csv(adhdbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/ADHD_Brainspan_effects.csv', row.names=F)
+```
+
+### Table of effects on IIV and PQB where numbers represent beta coefficients, single stars represent uncorrected significance, and double stars FDR significance
+```{r, echo = F}
+adhdtable <- makeIntoTable(adhdbrainspan.eur)
+adhdtable$pretty.table
+```
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+adhdeur_nulls = readNulls("ADHD", "EUR")
+
+adhdeur_snpcounts <- readsnpCounts(pgs = "ADHD", pop = "EUR")
+```
+
+
+Modules for which observed effect is significantly larger than the null: M5
+```{r, echo = F}
+adhd_actual_effects = adhdbrainspan.eur$betas
+
+adhdeur_NullP = loopModuleNulls(nulls = adhdeur_nulls, observed = adhd_actual_effects, snpcounts = adhdeur_snpcounts, numsnp = F)
+
+adhdeur_CompP = competitiveP(adhdeur_nulls, adhdbrainspan.eur)
+```
+
+Test M5 for CIs
+```{r}
+model <- lmer(z.pqb ~ z.ADHDEUR_M5 + PC1 + PC2 + PC3 + PC4 + PC5 + interview_age_new + demo_sex_v2 + (1|site_id_l/rel_family_id/subjectkey), master)
+
+gtLmerInterpret(model, var = "z.ADHDEUR_M5")
+```
+
+
+### AMR. 
+
+M16 significantly negatively predicts PQB, but only be permutation. not by multiple comparison
+
+```{r, include = F}
+adhdbrain.pgs <- colnames(select(master, z.ADHDAMR02.prscs.pgs, contains('z.ADHDAMR02_M')))
+
+adhdbrainspan.amr <- loopModThroughVars(dvs = all.dvs, ivs = adhdbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+
+```
+
+### Table of effects on IIV and PQB where numbers represent beta coefficients, single stars represent uncorrected significance, and double stars FDR significance
+```{r, echo = F}
+adhdtable <- makeIntoTable(adhdbrainspan.amr)
+adhdtable$pretty.table
+```
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+adhdamr_nulls = readNulls("ADHD", "AMR")
+
+adhdamr_snpcounts <- readsnpCounts(pgs = "ADHD", pop = "AMR")
+```
+
+```{r, echo = F}
+adhd_actual_effects = adhdbrainspan.amr$betas
+
+adhdamr_NullP = loopModuleNulls(nulls = adhdamr_nulls, observed = adhd_actual_effects, snpcounts = adhdamr_snpcounts)
+
+adhdamr_CompP = competitiveP(nulls = adhdamr_nulls, observed = adhdbrainspan.amr)
+```
+
+
+### AFR. 
+
+```{r, include = F}
+adhdbrain.pgs <- colnames(select(master, z.ADHDAFR02.prscs.pgs, contains('z.ADHDAFR02_M')))
+
+adhdbrainspan.afr <- loopModThroughVars(dvs = all.dvs, ivs = adhdbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+
+```
+
+### Table of effects on IIV and PQB where numbers represent beta coefficients, single stars represent uncorrected significance, and double stars FDR significance
+```{r, echo = F}
+adhdtable <- makeIntoTable(adhdbrainspan.afr)
+adhdtable$pretty.table
+```
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+adhdafr_nulls = readNulls("ADHD", "AFR")
+
+adhdafr_snpcounts <- readsnpCounts("ADHD", "AFR")
+```
+
+
+```{r, echo = F}
+adhd_actual_effects = adhdbrainspan.afr$betas
+
+adhdafr_NullP = loopModuleNulls(nulls = adhdafr_nulls, observed = adhd_actual_effects, snpcounts = adhdafr_snpcounts)
+
+adhdafr_CompP = competitiveP(adhdafr_nulls, adhdbrainspan.afr)
+```
+<hr style="border:dotted">
+
+# Brainspan CP. 
+
+
+### EUR. 
+
+10/23/2023: the output has 9.95k permutations. Will have to run the last 50 permutations before publishing
+
+Table of effects on IIV and PQB where numbers represent beta coefficients, single stars represent uncorrected significance, and double stars FDR significance
+```{r, include = F}
+all.dvs <- all.dvs
+cpbrain.pgs <- c('z.CPEUR.prscs.pgs',colnames(select(master, contains('z.CPEUR_M'))))
+row.names=pullModNum(x = cpbrain.pgs, first = "FS-CP")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+cpbrainspan.eur <- loopModThroughVars(dvs = all.dvs, ivs = cpbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+
+```
+
+```{r, echo = F}
+cptable <- makeIntoTable(cpbrainspan.eur)
+cptable$pretty.table
+```
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+cpeur_nulls = readNulls("CP", "EUR")
+
+cpeur_snpcounts <- readsnpCounts("CP", "EUR")
+```
+
+Red vertical line indicates observed effect. Outcome of both permutations and observed effects is PQB.  
+
+Value printed to the right of distribution represents the p-value of the permutation i.e., the proportion of values that are less than the observed effect (or greater than depending on the position of the observed effect relative to the median of the distribution).  
+
+Modules for which observed effect is significantly larger than the null: **M5** *observed effect significantly predicts PQB as well, but is not a candidate for mediation as there is no effect on attention. There may be other domains of cognition through which these genes influence PQB pathways*
+```{r, echo = F}
+cp_actual_effects = cpbrainspan.eur$betas
+
+cpeur_NullP = loopModuleNulls(nulls = cpeur_nulls, observed = cp_actual_effects, snpcounts = cpeur_snpcounts)
+
+cpeur_CompP = competitiveP(cpeur_nulls, cpbrainspan.eur)
+```
+
+
+### AMR. 
+
+M15 significantly positively predicts PQB by permutation, not by initial multiple comparisons though
+
+```{r, include = F}
+cpbrain.pgs <- c('z.CPAMR02.prscs.pgs',colnames(select(master, contains('z.CPAMR02_M'))))
+
+cpbrainspan.amr <- loopModThroughVars(dvs = all.dvs, ivs = cpbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+
+```
+
+```{r, echo = F}
+cptable <- makeIntoTable(cpbrainspan.amr)
+cptable$pretty.table
+```
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+cpamr_nulls = readNulls("CP", "AMR")
+
+cpamr_snpcounts <- readsnpCounts("CP", "AMR")
+```
+
+
+```{r, echo = F}
+cp_actual_effects = cpbrainspan.amr$betas
+
+cpamr_NullP = loopModuleNulls(nulls = cpamr_nulls, observed = cp_actual_effects, snpcounts = cpamr_snpcounts)
+
+cpamr_CompP = competitiveP(cpamr_nulls, cpbrainspan.amr)
+```
+
+
+### AFR.  
+
+M3 and M10 significantly positively and negatively (respectively) predict PQB by permutation. not by initial multiple comparisons.
+
+```{r, include = F}
+cpbrain.pgs <- c('z.CPAFR02.prscs.pgs',colnames(select(master, contains('z.CPAFR02_M'))))
+
+cpbrainspan.afr <- loopModThroughVars(dvs = all.dvs, ivs = cpbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+
+```
+
+```{r, echo = F}
+cptable <- makeIntoTable(cpbrainspan.afr)
+cptable$pretty.table
+```
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+cpafr_nulls = readNulls("CP", "AFR")
+
+cpafr_snpcounts <- readsnpCounts("CP", "AFR")
+```
+
+```{r, echo = F}
+cp_actual_effects = cpbrainspan.afr$betas
+
+cpafr_NullP = loopModuleNulls(nulls = cpafr_nulls, observed = cp_actual_effects, snpcounts = cpafr_snpcounts)
+
+cpafr_CompP = competitiveP(cpafr_nulls, cpbrainspan.afr)
+```
+
+<hr style="border:dotted">
+
+# Brainspan SCZ
+
+
+### EUR
+
+Table of effects on IIV and PQB where numbers represent beta coefficients, single stars represent uncorrected significance, and double stars FDR significance. 
+
+Modules for which observed effect is significantly larger than the null: **M6** *this module also significantly predicts PQB in models, but is not a candidate for mediation as it does not act on attention.*  
+```{r, include = F}
+all.dvs <- all.dvs
+sczbrain.pgs <- c('z.SCZEUR02.prscs.pgs',colnames(select(master, contains('z.SCZEUR02_M'))))
+row.names = pullModNum(x = sczbrain.pgs, first = "FG-SCZ")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+sczbrainspan.eur <- loopModThroughVars(dvs = all.dvs, ivs = sczbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+
+```
+
+
+```{r, echo = F}
+scztable <- makeIntoTable(sczbrainspan.eur)
+scztable$pretty.table
+```
+
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+sczeur_nulls = readNulls("SCZ", "EUR")
+
+sczeur_snpcounts <- readsnpCounts("SCZ", "EUR")
+```
+
+
+Red vertical line indicates observed effect. Outcome of both permutations and observed effects is PQB.  
+
+Value printed to the right of distribution represents the p-value of the permutation i.e., the proportion of values that are less than the observed effect (or greater than depending on the position of the observed effect relative to the median of the distribution). 
+
+```{r, echo = F}
+scz_actual_effects = sczbrainspan.eur$betas
+
+sczeur_NullP = loopModuleNulls(nulls = sczeur_nulls, observed = scz_actual_effects, snpcounts = sczeur_snpcounts)
+
+sczeur_CompP = competitiveP(sczeur_nulls, sczbrainspan.eur)
+```
+
+
+### AMR. 
+
+```{r, include = F}
+sczbrain.pgs <- c('z.SCZAMR02.prscs.pgs',colnames(select(master, contains('z.SCZAMR02_M'))))
+row.names = pullModNum(x = sczbrain.pgs, first = "FG-SCZ")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+sczbrainspan.amr <- loopModThroughVars(dvs = all.dvs, ivs = sczbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+
+```
+
+```{r, echo = F}
+scztable <- makeIntoTable(sczbrainspan.amr)
+scztable$pretty.table
+```
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+sczamr_nulls = readNulls("SCZ", "AMR")
+
+sczamr_snpcounts <- readsnpCounts("SCZ", "AMR")
+```
+
+
+```{r, echo = F}
+scz_actual_effects = sczbrainspan.amr$betas
+
+sczamr_NullP = loopModuleNulls(nulls = sczamr_nulls, observed = scz_actual_effects, snpcounts = sczamr_snpcounts)
+
+sczamr_CompP = competitiveP(sczamr_nulls, sczbrainspan.amr)
+```
+
+
+### AFR. No significant modules, so no permutations
+
+```{r, include = F}
+sczbrain.pgs <- c('z.SCZAFR02.prscs.pgs',colnames(select(master, contains('z.SCZAFR02_M'))))
+
+sczbrainspan.afr <- loopModThroughVars(dvs = all.dvs, ivs = sczbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+
+```
+
+```{r, echo = F}
+scztable <- makeIntoTable(sczbrainspan.afr)
+scztable$pretty.table
+```
+
+```{r, echo = F, eval = F}
+scz_actual_effects = sczbrainspan.afr$betas
+
+sczafr_NullP = ""
+
+sczafr_CompP = ""
+```
+
+
+<hr style="border:dotted">
+
+# Brainspan NDV. 
+
+
+### EUR. 
+
+10/24/23: still need to do 50 permutations before publishing
+
+Table of effects on IIV and PQB where numbers represent beta coefficients, single stars represent uncorrected significance, and double stars FDR significance. 
+
+
+```{r, include = F}
+all.dvs <- all.dvs
+ndvbrain.pgs <- c('z.NDVEUR02.prscs.pgs',colnames(select(master, contains('z.NDVEUR02_M'))))
+row.names= pullModNum(x = ndvbrain.pgs, first = "FG-NDV")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+ndvbrainspan.eur <- loopModThroughVars(dvs = all.dvs, ivs = ndvbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+```
+
+```{r, echo = F}
+ndvtable <- makeIntoTable(ndvbrainspan.eur)
+ndvtable$pretty.table
+```
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+ndveur_nulls = readNulls("NDV", "EUR")
+
+ndveur_snpcounts <- readsnpCounts("NDV", "EUR")
+```
+
+Red vertical line indicates observed effect. Outcome of both permutations and observed effects is PQB.  
+
+Value printed to the right of distribution represents the p-value of the permutation i.e., the proportion of values that are less than the observed effect (or greater than depending on the position of the observed effect relative to the median of the distribution). 
+```{r, echo = F}
+ndv_actual_effects = ndvbrainspan.eur$betas
+
+ndveur_NullP = loopModuleNulls(nulls = ndveur_nulls, observed = ndv_actual_effects, snpcounts = ndveur_snpcounts, numsnp = F)
+
+ndveur_CompP = competitiveP(ndveur_nulls, ndvbrainspan.eur)
+```
+
+### AMR. 
+
+```{r, include = F}
+ndvbrain.pgs <- c('z.NDVAMR02.prscs.pgs',colnames(select(master, contains('z.NDVAMR02_M'))))
+
+ndvbrainspan.amr <- loopModThroughVars(dvs = all.dvs, ivs = ndvbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+```
+
+```{r, echo = F}
+ndvtable <- makeIntoTable(ndvbrainspan.amr)
+ndvtable$pretty.table
+```
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+ndvamr_nulls = readNulls("NDV", "AMR")
+
+ndvamr_snpcounts <- readsnpCounts("NDV", "AMR")
+```
+
+
+```{r, echo = F}
+ndv_actual_effects = ndvbrainspan.amr$betas
+
+ndvamr_NullP = loopModuleNulls(nulls = ndvamr_nulls, observed = ndv_actual_effects, snpcounts = ndvamr_snpcounts)
+
+ndvamr_CompP = competitiveP(ndvamr_nulls, ndvbrainspan.amr)
+```
+
+
+### AFR. 
+
+M6 significantly positively predicts PQB by permutation. not by initial multiple comparison.
+
+```{r, include = F}
+ndvbrain.pgs <- c('z.NDVAFR02.prscs.pgs',colnames(select(master, contains('z.NDVAFR02_M'))))
+
+ndvbrainspan.afr <- loopModThroughVars(dvs = all.dvs, ivs = ndvbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, tstat = T)
+```
+
+```{r, echo = F}
+ndvtable <- makeIntoTable(ndvbrainspan.afr)
+ndvtable$pretty.table
+```
+
+
+Reading in null distributions (10k permutations) and superimposing observed effects. 
+```{r}
+ndvafr_nulls = readNulls("NDV", "AFR")
+
+ndvafr_snpcounts <- readsnpCounts("NDV", "AFR")
+```
+
+
+```{r, echo = F}
+ndv_actual_effects = ndvbrainspan.afr$betas
+
+ndvafr_NullP = loopModuleNulls(nulls = ndvafr_nulls, observed = ndv_actual_effects, snpcounts = ndvafr_snpcounts)
+
+ndvafr_CompP = competitiveP(ndvafr_nulls, ndvbrainspan.afr)
+
+```
+
+<hr style="border:dotted">
+
+
+```{r, comparison of null effects, eval = F}
+names(adhdeur_nulls)
+names(adhdamr_nulls)
+test <- t.test(adhdamr_nulls$M7$PQB.Beta, adhdeur_nulls$M7$PQB.Beta)
+
+len = length(adhdamr_nulls) + length(adhdafr_nulls) + 
+  length(cpamr_nulls) + length(cpafr_nulls) +
+  length(sczamr_nulls) + 
+  length(ndvamr_nulls) + length(ndvafr_nulls)
+
+df <- data.frame("Module" = rep(NA, len),
+                 "PGS" = rep(NA, len),
+                 "Pop" = rep(NA, len),
+                 "Mean_nonEur" = rep(NA, len),
+                 "oneWayP" = rep(NA, len),
+                 "Mean_Eur" = rep(NA, len),
+                 "Dif" = rep(NA, len),
+                 "Pval" = rep(NA, len))
+
+
+count = 1
+for (dis in c("adhd","cp","scz","ndv")) {
+  for (pop in c("amr", "afr")) {
+    
+    if (dis == "scz" & pop == "afr") {
+      next
+    }
+    
+    nullName = paste0(dis, pop, "_nulls")
+    modNames = names(eval(parse(text = nullName)))
+    for (mod in modNames) {
+      
+      df$Module[count] = mod
+      df$Pop[count] = pop
+      df$PGS[count] = dis
+      
+      oneWay = eval(parse(text = paste0("t.test(", nullName, "$", mod, "$PQB.Beta)")))
+      df$oneWayP[count] = oneWay$p.value
+      
+      eurName = paste0(dis, "eur_nulls")
+      test <- eval(parse(text = paste0("t.test(", nullName, "$", mod, "$PQB.Beta, ", eurName, "$", mod, "$PQB.Beta)")))
+      
+      df$Mean_nonEur[count] = as.numeric(test$estimate[1])
+      df$Mean_Eur[count] = as.numeric(test$estimate[2])
+      df$Dif[count] = as.numeric(test$estimate[2]) - as.numeric(test$estimate[1])
+      df$Pval[count] = test$p.value
+      
+      count = count + 1
+    }
+  }
+}
+
+df
+```
+
+
+
+
+
+```{r, compare module size with mean null effect in eur}
+library(scales)
+
+plotSnpCounts_onMeanNulls = function(population, len) {
+  snpCounts = data.frame("Mod" = rep(NA, len),
+                       "PGS" = rep(NA, len),
+                       "Mean" = rep(NA, len),
+                       "SE" = rep(NA, len),
+                       "SNPCount" = rep(NA, len))
+
+  count = 1
+  for (dis in c("adhd","cp","scz","ndv")) {
+    
+    if (population == "afr" & dis == "scz") {
+      next
+    }
+    
+    moduleNames = names(eval(parse(text = paste0(dis, population, "_nulls"))))
+    for (mod in moduleNames) {
+    
+      vector = eval(parse(text = paste0(dis, population, "_nulls$", mod, "$PQB.Beta")))
+      snpCounts$Mod[count] = mod
+      snpCounts$PGS[count] = toupper(dis)
+      snpCounts$Mean[count] = mean(vector)
+      snpCounts$SE[count] = sd(vector) / length(vector)
+      
+      snps = eval(parse(text = paste0(dis, "eur_snpcounts")))
+      snpCounts$SNPCount[count] = snps[which(snps$V3 == mod), "V2"]
+      
+      count = count + 1
+    }
+  }
+  
+  plot <- ggplot(snpCounts, aes(x = SNPCount/1000, y = Mean, color = PGS)) + geom_point() + 
+    geom_line(stat = 'smooth', alpha = 0.8) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    xlab("SNP Count (in thousands)") +
+    ggtitle(toupper(population)) +
+    geom_errorbar(aes(ymin = Mean - SE, ymax = Mean + SE))
+  
+  print(plot)
+  return(snpCounts)
+}
+
+len = length(adhdeur_nulls) + length(cpeur_nulls) + length(sczeur_nulls) + length(ndveur_nulls)
+eurSnpCount = plotSnpCounts_onMeanNulls(population = "eur", len = len)
+
+len = length(adhdamr_nulls) + length(cpamr_nulls) + length(sczamr_nulls) + length(ndvamr_nulls)
+amrSnpCount = plotSnpCounts_onMeanNulls(population = "amr", len = len)
+
+len = length(adhdafr_nulls) + length(cpafr_nulls) + length(ndvafr_nulls)
+afrSnpCount = plotSnpCounts_onMeanNulls(population = "afr", len = len)
+```
+
+```{r}
+adhd_nullvsobs <- eurSnpCount %>%
+  filter(PGS == 'ADHD') 
+adhd_nullvsobs$Mean = adhd_nullvsobs$Mean/std
+
+adhdobs <- data.frame("Mod" = paste0("M", 1:18),
+                      "PGS" = rep("ADHD", 18),
+                      "Mean" = adhdbrainspan.eur$betas$z.pqb[2:nrow(adhdbrainspan.eur$betas)],
+                      "SE" = rep(NA, 18),
+                      "SNPCount" = adhd_nullvsobs$SNPCount)
+
+adhd_nullvsobs2 = rbind(adhd_nullvsobs, adhdobs)
+adhd_nullvsobs2$type = c(rep("Null", 18), rep("Obs", 18))
+
+adhd_nullvsobs2$Mod = factor(adhd_nullvsobs2$Mod, levels = unique(arrange(adhd_nullvsobs, SNPCount)$Mod))
+
+ggplot(adhd_nullvsobs2, aes(x = Mod, y = Mean, color = type)) + 
+  geom_point() +
+  geom_line(stat = 'smooth', alpha = 0.8) +
+  theme(axis.text.x = element_text(angle = 45, face = 'bold'))
+```
+
+
+```{r}
+for (i in names(adhdeur_nulls)) {
+
+  if (i %in% names(ndveur_nulls)) {
+    print(i)
+    print(t.test(adhdeur_nulls[[i]]["PQB.Beta"], ndveur_nulls[[i]]["PQB.Beta"]))
+  } 
+  
+}
+```
+
+<hr style="border:dotted">
+
+# Competitive P results
+```{r, comp-p-table}
+compP.table <- as.data.frame(matrix("-",ncol = 12, nrow = 18))
+colnames(compP.table) = c("ADHDEUR", "NDVEUR","SCZEUR","CPEUR",
+                          "ADHDAMR", "NDVAMR","SCZAMR","CPAMR",
+                          "ADHDAFR","NDVAFR","SCZAFR","CPAFR")
+rownames(compP.table) = paste0("M", 1:18)
+
+nullP.table <- as.data.frame(matrix("-", ncol = 12, nrow = 18))
+colnames(nullP.table) = colnames(compP.table)
+rownames(nullP.table) = rownames(compP.table)
+
+for (pgs in colnames(compP.table)) {
+  lower = tolower(pgs)
+  
+  pop = tolower(substr(pgs, start = (nchar(pgs)-2), stop = nchar(pgs)))
+  pgsonly = tolower(sub(toupper(pop), "", pgs))
+  
+  rawP = eval(parse(text = paste0(pgsonly, "brainspan.", pop, "$peas$z.pqb[-1]")))
+  rawP_Pass = which(rawP < 0.05)
+  rawP_PassMods = paste0("M", rawP_Pass)
+  
+  fdrP = eval(parse(text = paste0(pgsonly, "brainspan.", pop, "$fdr$z.pqb[-1]")))
+  fdrPass = which(fdrP < 0.05)
+  fdrPassMods = paste0("M", fdrPass)
+
+  
+  CompPeas = eval(parse(text = paste0(lower, "_CompP")))
+  NullPeas = eval(parse(text = paste0(lower, "_NullP")))
+  
+  compP.table[rawP_Pass, pgs] = round(as.numeric(CompPeas[which(names(CompPeas) %in% rawP_PassMods)]), 3)
+  compP.table[fdrPass, pgs] = paste0(compP.table[fdrPass, pgs], "*")
+  
+  
+  nullP.table[rawP_Pass, pgs] = round(as.numeric(NullPeas[which(names(CompPeas) %in% rawP_PassMods)]), 3)
+  nullP.table[fdrPass, pgs] = paste0(nullP.table[fdrPass, pgs], "*")
+  
+  
+  colnames(compP.table)[which(colnames(compP.table) == pgs)] = paste(toupper(pop), toupper(pgsonly), sep = "_")
+  colnames(nullP.table)[which(colnames(nullP.table) == pgs)] = paste(toupper(pop), toupper(pgsonly), sep = "_")
+  
+}
+
+gt(compP.table, rownames_to_stub = T) %>%
+  tab_spanner_delim(
+    delim = "_"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = 'bold', font = "Times New Roman"),
+    locations = list(
+      cells_stub(),
+      cells_column_spanners())
+   ) %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = list(cells_body(columns = everything(), rows = everything()), cells_stub())) %>%
+    tab_style(style = cell_text(font = "Times New Roman"),
+            locations = cells_column_labels()) %>%
+  tab_footnote(
+    footnote = "* = corresponding observed associations significant after FDR correction",
+  ) %>%
+  tab_style(style = cell_text(font = 'Times New Roman'),
+            locations = cells_footnotes()) %>%
+  tab_header(title = "Competitive P-values") %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = cells_title()) %>%
+  gtsave(filename = "~/Documents/ple_attention/figures/competitive_P_table.png")
+  
+
+
+gt(nullP.table, rownames_to_stub = T) %>%
+  tab_spanner_delim(
+    delim = "_"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = 'bold', font = "Times New Roman"),
+    locations = list(
+      cells_stub(),
+      cells_column_spanners())
+   ) %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = list(cells_body(columns = everything(), rows = everything()), cells_stub())) %>%
+    tab_style(style = cell_text(font = "Times New Roman"),
+            locations = cells_column_labels()) %>%
+  tab_footnote(
+    footnote = "* = corresponding observed associations significant after FDR correction",
+  ) %>%
+  tab_style(style = cell_text(font = 'Times New Roman'),
+            locations = cells_footnotes()
+  ) %>%
+  tab_header(title = "One-sided permuted P-values") %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = cells_title()) %>%
+  gtsave(filename = "~/Documents/ple_attention/figures/oneside_permuted_p_table.html")
+```
+
+
+
+Not shown: lasso regression or PLS to select modules that explain most variation ?
+```{r, eval=F}
+library(glmnet)
+library(pls)
+
+plsModel <- plsr(DistressScoreSum ~ z.NDV_newadhd_M1 + z.NDV_newadhd_M2 + z.NDV_newadhd_M3 + z.NDV_newadhd_M4 + z.NDV_newadhd_M5 + z.NDV_newadhd_M6 + z.NDV_newadhd_M7 + z.NDV_newadhd_M8 + z.NDV_newadhd_M9 + z.NDV_newadhd_M10 + z.NDV_newadhd_M11 + z.NDV_newadhd_M12 + z.NDV_newadhd_M13 + z.NDV_newadhd_M14 + z.NDV_newadhd_M15 + z.NDV_newadhd_M16 + z.NDV_newadhd_M17 + z.NDV_newadhd_M18 + z.pc1 + z.pc2 + z.pc3 + z.pc4 + z.pc5, scale = F, validation= "CV", data = pgs.y3)
+
+summary(plsModel)
+
+
+
+
+
+pgs.y3 <- filter(master, eventname == '3_year_follow_up_y_arm_1') %>%
+  filter(!is.na(DistressScoreSum)) %>%
+  filter(!is.na(z.NDV_newadhd_M1))
+y = pgs.y3$DistressScoreSum
+x = data.matrix(pgs.y3[,cpbrain.pgs[2:length(cpbrain.pgs)]])
+
+cv_model <- cv.glmnet(x = x, y = y, alpha = 1)
+best_lambda <- cv_model$lambda.min
+
+best_model <- glmnet(x, y, alpha = 1)
+coef(best_model)
+
+
+lasso.mod <- cv.glmnet(x = )
+allNDVMod = lmer(DistressScoreSum ~ z.NDV_newadhd_M1 + z.NDV_newadhd_M2 + z.NDV_newadhd_M3 + z.NDV_newadhd_M4 + z.NDV_newadhd_M5 + z.NDV_newadhd_M6 + z.NDV_newadhd_M7 + z.NDV_newadhd_M8 + z.NDV_newadhd_M9 + z.NDV_newadhd_M10 + z.NDV_newadhd_M11 + z.NDV_newadhd_M12 + z.NDV_newadhd_M13 + z.NDV_newadhd_M14 + z.NDV_newadhd_M15 + z.NDV_newadhd_M16 + z.NDV_newadhd_M17 + z.NDV_newadhd_M18 + z.pc1 + z.pc2 + z.pc3 + z.pc4 + z.pc5 + interview_age_new + demo_sex_v2 + (1|site_id_l/rel_family_id/subjectkey), master)
+summary(allNDVMod)
+```
+
