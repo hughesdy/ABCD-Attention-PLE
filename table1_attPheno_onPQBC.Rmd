@@ -1,0 +1,370 @@
+---
+title: "predictingPQB_wPhenotypes"
+author: "Dylan Hughes"
+date: "2024-02-25"
+output: html_document
+---
+
+```{r, include = F}
+library(knitr)
+knitr::opts_chunk$set(message = F)
+knitr::opts_chunk$set(warning = F)
+
+
+library(dplyr)
+library(ggplot2)
+library(conflicted)
+conflict_prefer('lmer', 'lmerTest')
+conflict_prefer('recode', 'dplyr')
+conflict_prefer('filter','dplyr')
+
+library(devtools)
+devtools::document('~/Documents/GitHub/dylanfuncs/dylanfuncs')
+library(lmerTest)
+library(gt)
+library(corrplot)
+library(sjPlot)
+
+knitr::asis_output(paste0("Last run: ", date()))
+```
+
+## This document creates Table 1 in Chang et al.
+```{r, warning=F, echo = F, message=FALSE}
+knitr::asis_output(paste0("Last run:   ", date()))
+
+imaging <- read.csv("~/Documents/abcd/abcd-data-release-5.1/core/imaging/mri_y_rsfmr_cor_gp_gp.csv") %>%
+  select("src_subject_id", "eventname", "rsfmri_c_ngd_cgc_ngd_dt","rsfmri_c_ngd_dla_ngd_dla", "rsfmri_c_ngd_cgc_ngd_cgc","rsfmri_c_ngd_dt_ngd_dt") %>%
+  rename(subjectkey = src_subject_id)
+
+imaging.inclusion = read.csv("~/Documents/abcd/abcd-data-release-5.1/core/imaging/mri_y_qc_incl.csv") %>%
+  select(src_subject_id, eventname, imgincl_rsfmri_include) %>%
+  rename(subjectkey = src_subject_id)
+
+race <- read.csv("~/Documents/abcd/abcd-data-release-5.1/core/abcd-general/abcd_p_demo.csv") %>%
+  filter(eventname == "baseline_year_1_arm_1") %>%
+  mutate(race.bin = ifelse(race_ethnicity == 1, 0, 
+                           ifelse(race_ethnicity != 1, 1, NA))) %>%
+  select(src_subject_id, race.bin) %>%
+  rename(subjectkey = src_subject_id)
+  
+
+master <- read.csv('~/Documents/ple_attention/data/masterSheet_20240127.csv') %>%
+  mutate(time.point = dplyr::recode(eventname, "baseline_year_1_arm_1" = 0, "1_year_follow_up_y_arm_1" = 1, "2_year_follow_up_y_arm_1" = 2, "3_year_follow_up_y_arm_1" = 3, "4_year_follow_up_y_arm_1" = 4)) %>%
+  left_join(.,imaging, by = c("subjectkey", "eventname")) %>%
+  left_join(.,imaging.inclusion, by = c("subjectkey","eventname")) %>%
+  left_join(.,race, by = "subjectkey")
+
+master$time.point = as.integer(master$time.point)
+master$rel_family_id = as.factor(master$rel_family_id)
+master$site_id_l = as.factor(master$site_id_l)
+master$income_recode = as.factor(master$income_recode)
+
+master$z.pqb = as.numeric(scale(master$DistressScoreSum))
+
+all.ivs = c("rsfmri_c_ngd_dt_ngd_dla","rsfmri_c_ngd_cgc_ngd_dt","rsfmri_c_ngd_dla_ngd_dla", "rsfmri_c_ngd_cgc_ngd_cgc","rsfmri_c_ngd_dt_ngd_dt")
+
+covariates.simple = c("rsfmri_meanmotion", 'interview_age_new','demo_sex_v2',"income_recode","race.bin", '(1|site_id_l/rel_family_id/subjectkey)')
+```
+
+```{r, iiv-models}
+col.names="PQB"
+row.names = "IIV"
+covariates = c("interview_age_new", "demo_sex_v2", "income_recode", "race.bin", "(1|site_id_l/rel_family_id/subjectkey)")
+
+iiv.results <- loopModThroughVars(dvs = "z.pqb", ivs = "iiv_composite_zscore", rownames=row.names, colnames = col.names, covariates = covariates, data = master, timeInteraction = F, tstat = T, silent = T, cis = T, tabMod = F)
+```
+
+```{r, rs-models}
+goodImaging = filter(master, imgincl_rsfmri_include == 1)
+
+col.names = "PQB"
+row.names = c("DMN-DAN", "DMN-CON", "DAN", "CON", "DMN")
+covariates = covariates.simple
+
+image.results <- loopModThroughVars(dvs = "z.pqb", ivs = all.ivs, rownames=row.names, colnames = col.names, covariates = covariates, data = goodImaging, timeInteraction = F, tstat = T, silent = T, cis = T, tabMod = F)
+```
+
+## Combine results into table-ready dataframe
+```{r}
+table2.dataframe <- data.frame("ß" = round(c(iiv.results$betas$PQB, image.results$betas$PQB),3),
+                               "CI" = c(iiv.results$cis$PQB, image.results$cis$PQB),
+                               "P" = c(iiv.results$peas$PQB, image.results$peas$PQB))
+table2.dataframe$fdr = p.adjust(table2.dataframe$P)
+
+table2.dataframe$P = ifelse(table2.dataframe$fdr < 0.05 & table2.dataframe$P < 0.001, paste0(format(table2.dataframe$P, digits = 3, scientific = T), "*"),
+                            ifelse(table2.dataframe$fdr < 0.05 & table2.dataframe$P > 0.001, paste0(round(table2.dataframe$P, 3), "*"),
+                                   round(table2.dataframe$P, 3)))
+
+table2.dataframe$CI = sub(" - ", ", ", table2.dataframe$CI)
+table2.dataframe$CI = paste0("[", table2.dataframe$CI, "]")
+
+
+table2.dataframe$IV = c("IIV", "Default Mode - Dorsal Attention anticorrelation","Default Mode - Cingulo-Opercular anticorrelation",
+                        "Dorsal Attention within-network connectivity", "Cingulo-Opercular within-network connectivity", "Defualt Mode within-network connectivity")
+```
+
+## Print table; Table 2
+```{r}
+table2.dataframe %>%
+  select(-fdr) %>%
+  gt(rowname_col = "IV") %>%
+  tab_options(stub.font.size = 12) %>%
+  tab_style(style = cell_text(weight = 'bold', style = 'italic', font = "Times New Roman"),
+            locations = cells_column_labels()) %>%
+  tab_style(style = cell_text(weight = 'bold', font = "Times New Roman"),
+            locations = cells_row_groups()) %>%
+  opt_row_striping() %>%
+  tab_options(data_row.padding = 3) %>%
+  tab_spanner(label = md("**on PQ-BC**"), columns = colnames(table2.dataframe)[1:3]) %>%
+  cols_label(CI = "95% CI") %>%
+  #tab_header(title = md("**Effects of PGS on PQB**")) %>%
+  tab_style(style = cell_text(font = "Times New Roman", weight = "bold"), 
+            locations = cells_title()) %>%
+  tab_footnote(footnote = "Reported coefficient estimates are standardized") %>%
+  tab_footnote(footnote = "* = FDR significant") %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = list(cells_body(columns = everything(), rows = everything()), 
+                             cells_stub(), 
+                             cells_footnotes(), 
+                             cells_column_spanners())) 
+  
+```
+
+
+## -- Sensitivity with general IQ (Supp Table 3)
+```{r, sensitivity}
+iq <- read.csv("~/Documents/abcd/abcd-data-release-5.1/core/neurocognition/nc_y_nihtb.csv") %>%
+  select(src_subject_id, eventname, nihtbx_totalcomp_agecorrected) %>%
+  rename(subjectkey = src_subject_id)
+
+## Merge with master and filter for baseline
+#### The reason we filter for baseline is because for follow up waves, participants did not complete all 7 of the NIH toolbox tasks necessary to generate a composite score
+master2 <- left_join(master, iq, by = c("subjectkey", "eventname")) %>%
+  filter(eventname == "baseline_year_1_arm_1")
+
+master2$z.pqb = as.numeric(scale(master2$DistressScoreSum))
+master2$z.iq = as.numeric(scale(master2$nihtbx_totalcomp_agecorrected))
+
+## -------------- First we'll make a table for baseline that does not include IQ in the model
+## IIV Models
+col.names="PQB"
+row.names = "IIV"
+covariates = c("interview_age_new", "demo_sex_v2", "income_recode", "race.bin", "(1|site_id_l/rel_family_id)")
+
+iiv.results.bl <- loopModThroughVars(dvs = "z.pqb", 
+                                  ivs = "iiv_composite_zscore", 
+                                  rownames=row.names, 
+                                  colnames = col.names, 
+                                  covariates = covariates, 
+                                  data = master2, 
+                                  timeInteraction = F, 
+                                  tstat = T, 
+                                  silent = T, 
+                                  cis = T, 
+                                  tabMod = F)
+
+#### Initialize model without IQ
+mod.noIQ <- lmer(z.pqb ~ iiv_composite_zscore + interview_age_new + demo_sex_v2 +
+                    income_recode + race.bin +
+                    (1|site_id_l/rel_family_id), master2)
+summary(mod.noIQ)
+
+#### Initialize model with IQ
+mod.withIQ <- lmer(z.pqb ~ iiv_composite_zscore + interview_age_new + demo_sex_v2 +
+                     income_recode + race.bin + z.iq +
+                     (1|site_id_l/rel_family_id), master2)
+summary(mod.withIQ)
+
+
+## Imaging models
+goodImaging2 = filter(master2, imgincl_rsfmri_include == 1)
+
+col.names = "PQB"
+row.names = c("DMN-DAN", "DMN-CON", "DAN", "CON", "DMN")
+covariates.imaging = c("rsfmri_meanmotion", "interview_age_new", "demo_sex_v2", "income_recode", "race.bin", "(1|site_id_l/rel_family_id)")
+
+image.results.bl <- loopModThroughVars(dvs = "z.pqb", 
+                                    ivs = all.ivs, 
+                                    rownames=row.names, 
+                                    colnames = col.names, 
+                                    covariates = covariates.imaging, 
+                                    data = goodImaging2, 
+                                    timeInteraction = F, 
+                                    tstat = T, 
+                                    silent = T, 
+                                    cis = T, 
+                                    tabMod = F)
+
+## Combine results into dataframe
+table1.dataframe.bl <- data.frame("ß" = round(c(iiv.results.bl$betas$PQB, image.results.bl$betas$PQB),3),
+                               "CI" = c(iiv.results.bl$cis$PQB, image.results.bl$cis$PQB),
+                               "P" = c(iiv.results.bl$peas$PQB, image.results.bl$peas$PQB))
+table1.dataframe.bl$fdr = p.adjust(table1.dataframe.bl$P)
+
+table1.dataframe.bl$P = ifelse(table1.dataframe.bl$fdr < 0.05 & table1.dataframe.bl$P < 0.001, paste0(format(table1.dataframe.bl$P, digits = 3, scientific = T), "*"),
+                            ifelse(table1.dataframe.bl$fdr < 0.05 & table1.dataframe.bl$P > 0.001, paste0(round(table1.dataframe.bl$P, 3), "*"),
+                                   round(table1.dataframe.bl$P, 3)))
+
+table1.dataframe.bl$CI = sub(" - ", ", ", table1.dataframe.bl$CI)
+table1.dataframe.bl$CI = paste0("[", table1.dataframe.bl$CI, "]")
+
+
+table1.dataframe.bl$IV = c("IIV", "Default Mode - Dorsal Attention anticorrelation","Default Mode - Cingulo-Opercular anticorrelation",
+                        "Dorsal Attention within-network connectivity", "Cingulo-Opercular within-network connectivity", "Defualt Mode within-network connectivity")
+
+## Print table
+table1.dataframe.bl %>%
+  select(-fdr) %>%
+  gt(rowname_col = "IV") %>%
+  tab_options(stub.font.size = 12) %>%
+  tab_style(style = cell_text(weight = 'bold', style = 'italic', font = "Times New Roman"),
+            locations = cells_column_labels()) %>%
+  tab_style(style = cell_text(weight = 'bold', font = "Times New Roman"),
+            locations = cells_row_groups()) %>%
+  opt_row_striping() %>%
+  tab_options(data_row.padding = 3) %>%
+  tab_spanner(label = md("**on PQ-BC, at baseline**"), columns = colnames(table1.dataframe)[1:3]) %>%
+  cols_label(CI = "95% CI") %>%
+  #tab_header(title = md("**Effects of PGS on PQB**")) %>%
+  tab_style(style = cell_text(font = "Times New Roman", weight = "bold"), 
+            locations = cells_title()) %>%
+  tab_footnote(footnote = "Reported coefficient estimates are standardized") %>%
+  tab_footnote(footnote = "* = FDR significant") %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = list(cells_body(columns = everything(), rows = everything()), 
+                             cells_stub(), 
+                             cells_footnotes(), 
+                             cells_column_spanners())) 
+
+## -------------- Next we'll repeat the above but adding IQ
+col.names="PQB"
+row.names = "IIV"
+
+iiv.results.sens <- loopModThroughVars(dvs = "z.pqb", 
+                                  ivs = "iiv_composite_zscore", 
+                                  rownames=row.names, 
+                                  colnames = col.names, 
+                                  covariates = c(covariates, "z.iq"), 
+                                  data = master2, 
+                                  timeInteraction = F, 
+                                  tstat = T, 
+                                  silent = T, 
+                                  cis = T, 
+                                  tabMod = F)
+
+# #### Initialize model without IQ
+# mod.noIQ <- lmer(z.pqb ~ iiv_composite_zscore + interview_age_new + demo_sex_v2 +
+#                     income_recode + race.bin +
+#                     (1|site_id_l/rel_family_id), master2)
+# summary(mod.noIQ)
+# 
+# #### Initialize model with IQ
+# mod.withIQ <- lmer(z.pqb ~ iiv_composite_zscore + interview_age_new + demo_sex_v2 +
+#                      income_recode + race.bin + z.iq +
+#                      (1|site_id_l/rel_family_id), master2)
+# summary(mod.withIQ)
+
+
+## Imaging models
+col.names = "PQB"
+row.names = c("DMN-DAN", "DMN-CON", "DAN", "CON", "DMN")
+
+image.results.sens <- loopModThroughVars(dvs = "z.pqb", 
+                                    ivs = all.ivs, 
+                                    rownames=row.names, 
+                                    colnames = col.names, 
+                                    covariates = c(covariates, "z.iq"), 
+                                    data = goodImaging2, 
+                                    timeInteraction = F, 
+                                    tstat = T, 
+                                    silent = T, 
+                                    cis = T, 
+                                    tabMod = F)
+
+## Combine results into dataframe.sens.sens
+table1.dataframe.sens <- data.frame("ß" = round(c(iiv.results.sens$betas$PQB, image.results.sens$betas$PQB),3),
+                               "CI" = c(iiv.results.sens$cis$PQB, image.results.sens$cis$PQB),
+                               "P" = c(iiv.results.sens$peas$PQB, image.results.sens$peas$PQB))
+table1.dataframe.sens$fdr = p.adjust(table1.dataframe.sens$P)
+
+table1.dataframe.sens$P = ifelse(table1.dataframe.sens$fdr < 0.05 & table1.dataframe.sens$P < 0.001, paste0(format(table1.dataframe.sens$P, digits = 3, scientific = T), "*"),
+                            ifelse(table1.dataframe.sens$fdr < 0.05 & table1.dataframe.sens$P > 0.001, paste0(round(table1.dataframe.sens$P, 3), "*"),
+                                   round(table1.dataframe.sens$P, 3)))
+
+table1.dataframe.sens$CI = sub(" - ", ", ", table1.dataframe.sens$CI)
+table1.dataframe.sens$CI = paste0("[", table1.dataframe.sens$CI, "]")
+
+
+table1.dataframe.sens$IV = c("IIV", "Default Mode - Dorsal Attention anticorrelation","Default Mode - Cingulo-Opercular anticorrelation",
+                        "Dorsal Attention within-network connectivity", "Cingulo-Opercular within-network connectivity", "Defualt Mode within-network connectivity")
+
+## Print table
+table1.dataframe.sens %>%
+  select(-fdr) %>%
+  gt(rowname_col = "IV") %>%
+  tab_options(stub.font.size = 12) %>%
+  tab_style(style = cell_text(weight = 'bold', style = 'italic', font = "Times New Roman"),
+            locations = cells_column_labels()) %>%
+  tab_style(style = cell_text(weight = 'bold', font = "Times New Roman"),
+            locations = cells_row_groups()) %>%
+  opt_row_striping() %>%
+  tab_options(data_row.padding = 3) %>%
+  tab_spanner(label = md("**on PQ-BC, at baseline**"), columns = colnames(table1.dataframe.sens)[c(1:3)]) %>%
+  cols_label(CI = "95% CI") %>%
+  #tab_header(title = md("**Effects of PGS on PQB**")) %>%
+  tab_style(style = cell_text(font = "Times New Roman", weight = "bold"), 
+            locations = cells_title()) %>%
+  tab_footnote(footnote = "Reported coefficient estimates are standardized") %>%
+  tab_footnote(footnote = "General cognitive ability included in the model") %>%
+  tab_footnote(footnote = "* = FDR significant") %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = list(cells_body(columns = everything(), rows = everything()), 
+                             cells_stub(), 
+                             cells_footnotes(), 
+                             cells_column_spanners())) 
+
+## Combine results into one table
+table1.data.frame.sens.combined = left_join(table1.dataframe.bl, table1.dataframe.sens, by = "IV") %>%
+  select(-contains("CI"), -contains("fdr"))
+
+
+
+#### Supp Table 3
+## 
+table1.data.frame.sens.combined %>%
+  gt(rowname_col = "IV") %>%
+  tab_options(stub.font.size = 12) %>%
+  tab_style(style = cell_text(weight = 'bold', style = 'italic', font = "Times New Roman"),
+            locations = cells_column_labels()) %>%
+  tab_style(style = cell_text(weight = 'bold', font = "Times New Roman"),
+            locations = cells_row_groups()) %>%
+  opt_row_striping() %>%
+  tab_options(data_row.padding = 3) %>%
+  tab_spanner(label = md("**on PQ-BC, without IQ**"), columns = colnames(table1.data.frame.sens.combined)[c(1,2)], gather = F) %>%
+  tab_spanner(label = md("**on PQ-BC, with IQ**"), columns = colnames(table1.data.frame.sens.combined[c(4,5)]), gather = T) %>%
+  cols_label(ß.x = "ß", P.x = "P", ß.y = "ß", P.y = "P") %>%
+  #tab_header(title = md("**Effects of PGS on PQB**")) %>%
+  tab_style(style = cell_text(font = "Times New Roman", weight = "bold"), 
+            locations = cells_title()) %>%
+  tab_footnote(footnote = "Reported coefficient estimates are standardized") %>%
+  tab_footnote(footnote = "General cognitive ability (IQ) included in the models represented on the right side") %>%
+  tab_footnote(footnote = "* = FDR significant") %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = list(cells_body(columns = everything(), rows = everything()), 
+                             cells_stub(), 
+                             cells_footnotes(), 
+                             cells_column_spanners())) %>%
+  tab_style(
+    style = cell_borders(
+      sides = "left",
+      weight = px(1)),
+    locations = cells_body(
+      columns = 4
+      )
+    )
+##########################################################
+```
+
+
+
+

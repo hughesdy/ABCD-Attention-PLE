@@ -1,0 +1,819 @@
+---
+title: "Brainspan_pPGS_summary"
+author: "Dylan Hughes"
+date: "2023-08-11"
+output: html_document
+---
+
+
+```{r, include = F}
+library(knitr)
+knitr::opts_chunk$set(message = F)
+knitr::opts_chunk$set(warning = F)
+
+
+library(dplyr)
+library(ggplot2)
+library(conflicted)
+conflict_prefer('lmer', 'lmerTest')
+conflict_prefer('recode', 'dplyr')
+conflict_prefer('filter','dplyr')
+
+library(devtools)
+
+## You will need dylanfuncs for this which can be downloaded here: https://github.com/hughesdy/dylanfuncs
+devtools::document('~/Documents/GitHub/dylanfuncs/dylanfuncs')
+library(lmerTest)
+library(gt)
+library(corrplot)
+library(sjPlot)
+
+
+```
+
+```{r, warning=F, echo = F, message=FALSE}
+knitr::asis_output(paste0("Last run:   ", date()))
+
+master <- read.csv('~/Documents/ple_attention/data/masterSheet_20240127.csv') %>%
+  mutate(time.point = dplyr::recode(eventname, "baseline_year_1_arm_1" = 0, "1_year_follow_up_y_arm_1" = 1, "2_year_follow_up_y_arm_1" = 2, "3_year_follow_up_y_arm_1" = 3, "4_year_follow_up_y_arm_1" = 4))
+
+master$time.point = as.integer(master$time.point)
+master$rel_family_id = as.factor(master$rel_family_id)
+master$site_id_l = as.factor(master$site_id_l)
+
+master$z.pqb = as.numeric(scale(master$DistressScoreSum))
+
+cognitive.vars = c('iiv_composite_zscore')
+all.dvs = c(cognitive.vars, 'z.pqb')
+short.dvs = substr(all.dvs, start = 1, stop = 15)
+
+pgs = c('z.ADHDEUR.prscs.pgs','z.ADHDAFR02.prscs.pgs', 'z.ADHDAMR02.prscs.pgs',
+        'z.NDVEUR02.prscs.pgs', 'z.NDVAFR02.prscs.pgs', 'z.NDVAMR02.prscs.pgs',
+        'z.SCZEUR02.prscs.pgs','z.SCZAFR02.prscs.pgs','z.SCZAMR02.prscs.pgs',
+        'z.CPEUR.prscs.pgs', 'z.CPAFR02.prscs.pgs','z.CPAMR02.prscs.pgs',
+        "z.RTVEUR.prscs.pgs", "z.RTVAFR.prscs.pgs","z.RTVAMR.prscs.pgs")
+
+covariates.simple = c("PC1","PC2","PC3","PC4","PC5",'interview_age_new','demo_sex_v2','(1|site_id_l/rel_family_id/subjectkey)')
+
+
+pullModNum <- function(x, first) {
+  for (i in c(2:length(x))) {
+    split = strsplit(x[i], split = '')[[1]]
+    num = as.numeric(split[(length(split)-1):length(split)])
+    num.paste = paste(num[!is.na(num)], collapse = '')
+    x[i] = paste('M', num.paste, collapse = '', sep = '')
+  }
+  
+  final <- c(first, x[2:length(x)])
+  return(final)
+}
+
+```
+
+## Effect sizes of PGS on cognitive performance + PQB
+
+
+
+# Whole-genome
+
+### EUR
+```{r, include = F}
+all.dvs <- all.dvs
+fs.pgs <- pgs[grepl("EUR", pgs)]
+row.names=c('ADHD','NDV','SCZ', 'CP', "IIV")
+col.names = substr(all.dvs, start = 1, stop = 15)
+covariates = covariates.simple
+
+fs.results <- loopModThroughVars(dvs = all.dvs, ivs = fs.pgs, rownames=row.names, colnames = col.names, covariates = covariates, data = master, timeInteraction = F, tstat = T, silent = T, cis = T)
+```
+
+```{r, echo = F}
+fstable <- makeIntoTable(fs.results)
+fstable$pretty.table
+```
+
+## AMR. 
+Of note, SCZ is the only score that used GWAS derived from matching ancestry (AMR); the other two (ADHD and CP) applied European GWAS to AMR subjects
+```{r, include = F}
+all.dvs <- all.dvs
+fs.pgs <- pgs[grepl("AMR",pgs)]
+row.names=c('ADHD','NDV','SCZ', 'CP', "IIV")
+col.names = substr(all.dvs, start = 1, stop = 15)
+covariates = c(covariates.simple)
+
+amr.res <- loopModThroughVars(dvs = all.dvs, ivs = fs.pgs, rownames = row.names, colnames = col.names, covariates = covariates, data = master, timeInteraction = F, tstat = T, silent = T, cis = T)
+```
+
+```{r, echo = F}
+amr.table <- makeIntoTable(amr.res)
+amr.table$pretty.table
+```
+
+## AFR
+See notes above about ADHD and CP multiancestry scores.
+```{r, include = F}
+all.dvs <- all.dvs
+fs.pgs <- pgs[grepl("AFR", pgs)]
+row.names=c('ADHD','NDV','SCZ', 'CP', "IIV")
+col.names = substr(all.dvs, start = 1, stop = 15)
+covariates = c(covariates.simple)
+
+afr.res <- loopModThroughVars(dvs = all.dvs, ivs = fs.pgs, rownames = row.names, colnames = col.names, covariates = covariates, data = master, timeInteraction = F, tstat = T, silent = T, cis = T)
+```
+
+```{r, echo = F}
+afr.table <- makeIntoTable(afr.res)
+afr.table$pretty.table
+```
+
+# Table 2
+## Prep data for publication tables (table 2)
+
+### Get fdr values. with n = 30 (5 pgs x 3 pop x 2 dv)
+```{r}
+fdr.dataFrame = data.frame(
+  "DV" = rep(c(rep("IIV", 5), rep("PQB", 5)), 3),
+  "Pop" = c(rep("EUR", 10), rep("AMR", 10), rep("AFR", 10)),
+  "PGS" = rep(c("ADHD","NDV","SCZ","CP","IIV"), 6),
+  "rawPeas" = c(fs.results$peas$iiv_composite_z,
+             fs.results$peas$z.pqb,
+             amr.res$peas$iiv_composite_z,
+             amr.res$peas$z.pqb,
+             afr.res$peas$iiv_composite_z, 
+             afr.res$peas$z.pqb))
+
+fdr.dataFrame$FDR = p.adjust(fdr.dataFrame$rawPeas, method = 'fdr')
+```
+
+
+### PQB
+```{r}
+fdrTable <- fdr.dataFrame %>%
+  filter(DV == "PQB") %>%
+  select(Pop, PGS, FDR)
+
+pqb_table <- data.frame("PGS" = rep(rownames(fs.results$betas), 3),
+           "Beta" = round(c(fs.results$betas$z.pqb, amr.res$betas$z.pqb, afr.res$betas$z.pqb), 3),
+           "CI" = (c(fs.results$cis$z.pqb, amr.res$cis$z.pqb, afr.res$cis$z.pqb)),
+           "P" = c(fs.results$peas$z.pqb, amr.res$peas$z.pqb, afr.res$peas$z.pqb),
+           "Pop" = c(rep("EUR", 5), rep("AMR", 5), rep("AFR", 5))) %>%
+  left_join(., fdrTable, by = c("Pop", "PGS"))
+
+pqb_table$P = ifelse(pqb_table$FDR < 0.05, paste0(format(pqb_table$P, digits = 3, scientific = T), "*"), 
+                     ifelse(pqb_table$P < 0.001 & pqb_table$FDR > 0.05, format(pqb_table$P, digits = 3, scientific = T), 
+                            round(pqb_table$P, 3)))
+
+
+pqb_table %>%
+  select(-FDR) %>%
+  group_by(Pop) %>%
+  gt(rowname_col = "PGS", groupname_col = "Pop") %>%
+  tab_style(style = cell_text(weight = 'bold', style = 'italic', font = "Times New Roman"),
+            locations = cells_column_labels()) %>%
+  tab_stub_indent(rows = c(1:15), indent = 5) %>%
+  tab_style(style = cell_text(weight = 'bold', font = "Times New Roman"),
+            locations = cells_row_groups()) %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = list(cells_body(columns = everything(), rows = everything()), cells_stub())) %>%
+  opt_row_striping() %>%
+  tab_options(data_row.padding = 3) %>%
+  cols_label(CI = "95% CI", Beta = "ß") %>%
+  tab_header(title = md("**Effects of PGS on PQB**")) %>%
+  tab_style(style = cell_text(font = "Times New Roman", weight = "bold"), 
+            locations = cells_title()) %>%
+  tab_footnote(footnote = "Reported coefficient estimates are standardized") %>%
+  tab_footnote(footnote = "* = FDR significant") %>%
+  tab_style(style = cell_text(font = "Times New Roman"), 
+            locations = cells_footnotes())
+
+```
+
+### IIV
+```{r}
+fdrTable <- fdr.dataFrame %>%
+  filter(DV == "IIV") %>%
+  select(Pop, PGS, FDR)
+
+iiv_table <- data.frame("PGS" = rep(rownames(fs.results$betas), 3),
+           "Beta" = round(c(fs.results$betas$iiv_composite_z, amr.res$betas$iiv_composite_z, afr.res$betas$iiv_composite_z), 3),
+           "CI" = (c(fs.results$cis$iiv_composite_z, amr.res$cis$iiv_composite_z, afr.res$cis$iiv_composite_z)),
+           "P" = c(fs.results$peas$iiv_composite_z, amr.res$peas$iiv_composite_z, afr.res$peas$iiv_composite_z),
+           "Pop" = c(rep("EUR", 5), rep("AMR", 5), rep("AFR", 5))) %>%
+  left_join(.,fdrTable, by = c("Pop","PGS"))
+
+iiv_table$P = ifelse(iiv_table$FDR < 0.05, paste0(format(iiv_table$P, digits = 3, scientific = T), "*"), 
+                     ifelse(iiv_table$P < 0.001 & iiv_table$FDR > 0.05, format(iiv_table$P, digits = 3, scientific = T), 
+                            round(iiv_table$P, 3)))
+
+
+iiv_table %>%
+  select(-FDR) %>%
+  group_by(Pop) %>%
+  gt(rowname_col = "PGS", groupname_col = "Pop") %>%
+  tab_style(style = cell_text(weight = 'bold', style = 'italic', font = "Times New Roman"),
+            locations = cells_column_labels()) %>%
+  tab_stub_indent(rows = c(1:15), indent = 5) %>%
+  tab_style(style = cell_text(weight = 'bold', font = "Times New Roman"),
+            locations = cells_row_groups()) %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = list(cells_body(columns = everything(), rows = everything()), cells_stub())) %>%
+  opt_row_striping() %>%
+  tab_options(data_row.padding = 3) %>%
+  cols_label(CI = "95% CI", Beta = "ß") %>%
+  tab_header(title = md("**Effects of PGS on IIV**")) %>%
+  tab_style(style = cell_text(font = "Times New Roman", weight = "bold"), 
+            locations = cells_title()) %>%
+  tab_footnote(footnote = "Reported coefficient estimates are standardized") %>%
+  tab_footnote(footnote = "* = FDR significant") %>%
+  tab_style(style = cell_text(font = "Times New Roman"), 
+            locations = cells_footnotes())
+
+```
+
+### join PQB and IIV table
+```{r}
+pqb4join <- pqb_table %>%
+  select(-FDR)
+
+colnames(pqb4join)[c(2,3,4)] = paste0(colnames(pqb4join[c(2,3,4)]), ".pqb")
+pqb4join$CI.pqb = sub(" - ", ", ", pqb4join$CI.pqb)
+pqb4join$CI.pqb = paste0("[", pqb4join$CI.pqb, "]")
+pqb4join$PGS = ifelse(pqb4join$PGS == "NDV", "Neurodev", 
+                      ifelse(pqb4join$PGS == "CP", "Cognition", pqb4join$PGS))
+
+
+iiv4join <- iiv_table %>%
+  select(-FDR)
+
+colnames(iiv4join)[c(2,3,4)] = paste0(colnames(iiv4join[c(2,3,4)]), ".iiv")
+iiv4join$CI.iiv = sub(" - ", ", ", iiv4join$CI.iiv)
+iiv4join$CI.iiv = paste0("[", iiv4join$CI.iiv, "]")
+iiv4join$PGS = ifelse(iiv4join$PGS == "NDV", "Neurodev", 
+                      ifelse(iiv4join$PGS == "CP", "Cognition", iiv4join$PGS))
+
+
+left_join(pqb4join, iiv4join, by = c("PGS","Pop")) %>%
+  group_by(Pop) %>%
+  gt(rowname_col = "PGS", groupname_col = "Pop") %>%
+  tab_style(style = cell_text(weight = 'bold', style = 'italic', font = "Times New Roman"),
+            locations = cells_column_labels()) %>%
+  tab_stub_indent(rows = c(1:15), indent = 5) %>%
+  tab_style(style = cell_text(weight = 'bold', font = "Times New Roman"),
+            locations = cells_row_groups()) %>%
+  tab_style(style = cell_text(font = "Times New Roman"),
+            locations = list(cells_body(columns = everything(), rows = everything()), cells_stub())) %>%
+  opt_row_striping() %>%
+  tab_options(data_row.padding = 3) %>%
+  tab_spanner(label = md("**on PQ-BC**"), columns = matches(".pqb")) %>%
+  tab_spanner(label = md("**on IIV**"), columns = matches(".iiv")) %>%
+  cols_label(CI.pqb = "95% CI", Beta.pqb = "ß", P.pqb = "P",
+             Beta.iiv = "ß", CI.iiv = "95% CI", P.iiv = "P") %>%
+  #tab_header(title = md("**Effects of PGS on IIV**")) %>%
+  tab_style(style = cell_text(font = "Times New Roman", weight = "bold"), 
+            locations = cells_title()) %>%
+  tab_footnote(footnote = "Reported coefficient estimates are standardized") %>%
+  tab_footnote(footnote = "* = FDR significant") %>%
+  tab_style(style = cell_text(font = "Times New Roman"), 
+            locations = cells_footnotes()) %>%  
+  tab_style(
+    style = cell_borders(
+      sides = "left",
+      color = "lightgrey"),
+    locations = cells_body(
+      columns = c(CI.pqb, P.pqb, CI.iiv, P.iiv)
+      )
+    ) %>%  
+  tab_style(
+    style = cell_borders(
+      sides = "left",
+      weight = px(2)),
+    locations = cells_body(
+      columns = Beta.iiv
+      )
+    )
+
+```
+
+
+# -------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------
+
+# Brainspan pPGS
+
+
+## CP  
+
+### EUR
+
+```{r, include = F}
+all.dvs <- all.dvs
+cpbrain.pgs <- colnames(select(master, z.CPEUR.prscs.pgs, contains('z.CPEUR_M')))
+row.names=pullModNum(x = cpbrain.pgs, first = "FG-CP")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+cpbrainspan.eur <- loopModThroughVars(dvs = all.dvs, ivs = cpbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+
+#write.csv(cpbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/CP_Brainspan_effects.csv', row.names=F)
+```
+
+```{r, echo = F}
+cptable <- makeIntoTable(cpbrainspan.eur)
+cptable$pretty.table
+```
+
+### AMR
+
+```{r, include = F}
+all.dvs <- all.dvs
+cpbrain.pgs <- colnames(select(master, z.CPAMR02.prscs.pgs, contains('z.CPAMR02_M')))
+row.names=pullModNum(x = cpbrain.pgs, first = "FG-CP")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+cpbrainspan.amr <- loopModThroughVars(dvs = all.dvs, ivs = cpbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+
+#write.csv(cpbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/CP_Brainspan_effects.csv', row.names=F)
+```
+
+```{r, echo = F}
+
+cptable <- makeIntoTable(cpbrainspan.amr)
+cptable$pretty.table
+```
+
+### AFR  
+
+```{r, include = F}
+all.dvs <- all.dvs
+cpbrain.pgs <- colnames(select(master, z.CPAFR02.prscs.pgs, contains('z.CPAFR02_M')))
+row.names=pullModNum(x = cpbrain.pgs, first = "FG-CP")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+cpbrainspan.afr <- loopModThroughVars(dvs = all.dvs, ivs = cpbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+
+#write.csv(cpbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/CP_Brainspan_effects.csv', row.names=F)
+```
+
+```{r, echo = F}
+cptable <- makeIntoTable(cpbrainspan.afr)
+cptable$pretty.table
+```
+
+## SCZ  
+
+### EUR. 
+
+```{r, include = F}
+all.dvs <- all.dvs
+cols = substr(all.dvs, start = 1, stop = 15)
+
+sczbrain.pgs <- colnames(select(master, z.SCZEUR02.prscs.pgs, contains('z.SCZEUR02_M')))
+row.names=pullModNum(x = sczbrain.pgs, first = "FG-SCZ")
+
+sczbrainspan.eur <- loopModThroughVars(dvs = all.dvs, ivs = sczbrain.pgs, rownames=row.names, colnames = cols, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+
+#write.csv(sczbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/SCZ_Brainspan_effects.csv', row.names=F)
+```
+
+```{r, echo = F}
+scztable <- dylanfuncs::makeIntoTable(sczbrainspan.eur)
+scztable$pretty.table
+```
+
+### AMR. 
+
+```{r, include = F}
+all.dvs <- all.dvs
+cols = substr(all.dvs, start = 1, stop = 15)
+
+sczbrain.pgs <- colnames(select(master, z.SCZAMR02.prscs.pgs, contains('z.SCZAMR02_M')))
+row.names=pullModNum(x = sczbrain.pgs, first = "FG-SCZ")
+
+sczbrainspan.amr <- loopModThroughVars(dvs = all.dvs, ivs = sczbrain.pgs, rownames=row.names, colnames = cols, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+
+#write.csv(sczbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/SCZ_Brainspan_effects.csv', row.names=F)
+```
+
+```{r, echo = F}
+scztable <- dylanfuncs::makeIntoTable(sczbrainspan.amr)
+scztable$pretty.table
+```
+
+### AFR.  
+
+```{r, include = F}
+all.dvs <- all.dvs
+cols = substr(all.dvs, start = 1, stop = 15)
+
+sczbrain.pgs <- colnames(select(master, z.SCZAFR02.prscs.pgs, contains('z.SCZAFR02_M')))
+row.names=pullModNum(x = sczbrain.pgs, first = "FG-SCZ")
+
+sczbrainspan.afr <- loopModThroughVars(dvs = all.dvs, ivs = sczbrain.pgs, rownames=row.names, colnames = cols, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+
+#write.csv(sczbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/SCZ_Brainspan_effects.csv', row.names=F)
+```
+
+```{r, echo = F}
+scztable <- dylanfuncs::makeIntoTable(sczbrainspan.afr)
+scztable$pretty.table
+```
+
+## ADHD. 
+
+### EUR
+
+```{r, include = F}
+all.dvs <- all.dvs
+adhdbrain.pgs <- colnames(select(master, z.ADHDEUR.prscs.pgs, contains('z.ADHDEUR_M')))
+row.names=pullModNum(x = adhdbrain.pgs, first = "FG-ADHD")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+adhdbrainspan.eur <- loopModThroughVars(dvs = all.dvs, ivs = adhdbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+
+#write.csv(adhdbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/ADHD_Brainspan_effects.csv', row.names=F)
+```
+
+```{r, echo = F}
+adhdtable <- makeIntoTable(adhdbrainspan.eur)
+adhdtable$pretty.table
+```
+
+### AMR
+
+```{r, include = F}
+all.dvs <- all.dvs
+adhdbrain.pgs <- colnames(select(master, z.ADHDAMR02.prscs.pgs, contains('z.ADHDAMR02_M')))
+row.names=pullModNum(x = adhdbrain.pgs, first = "FG-ADHD")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+adhdbrainspan.amr <- loopModThroughVars(dvs = all.dvs, ivs = adhdbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+
+#write.csv(adhdbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/ADHD_Brainspan_effects.csv', row.names=F)
+```
+
+```{r, echo = F}
+adhdtable <- makeIntoTable(adhdbrainspan.amr)
+adhdtable$pretty.table
+```
+
+### AFR
+
+```{r, include = F}
+all.dvs <- all.dvs
+adhdbrain.pgs <- colnames(select(master, z.ADHDAFR02.prscs.pgs, contains('z.ADHDAFR02_M')))
+row.names=pullModNum(x = adhdbrain.pgs, first = "FG-ADHD")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+adhdbrainspan.afr <- loopModThroughVars(dvs = all.dvs, ivs = adhdbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+
+#write.csv(adhdbrainspan$betas, '~/Documents/abcd/genetics/PGS/brainspan_effects/ADHD_Brainspan_effects.csv', row.names=F)
+```
+
+```{r, echo = F}
+adhdtable <- makeIntoTable(adhdbrainspan.afr)
+adhdtable$pretty.table
+```
+
+
+## NDV. 
+
+### EUR. 
+
+```{r, include = F}
+all.dvs <- all.dvs
+ndvbrain.pgs <- colnames(select(master, z.NDVEUR02.prscs.pgs, contains('z.NDVEUR02_M')))
+row.names=pullModNum(x = ndvbrain.pgs, first = "FG-NDV")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+ndvbrainspan.eur <- loopModThroughVars(dvs = all.dvs, ivs = ndvbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+```
+
+```{r, echo = F}
+ndvtable <- makeIntoTable(ndvbrainspan.eur)
+ndvtable$pretty.table
+```
+
+### AMR. 
+
+```{r, include = F}
+all.dvs <- all.dvs
+ndvbrain.pgs <- colnames(select(master, z.NDVAMR02.prscs.pgs, contains('z.NDVAMR02_M')))
+row.names=pullModNum(x = ndvbrain.pgs, first = "FG-NDV")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+ndvbrainspan.amr <- loopModThroughVars(dvs = all.dvs, ivs = ndvbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+```
+
+```{r, echo = F}
+ndvtable <- makeIntoTable(ndvbrainspan.amr)
+ndvtable$pretty.table
+```
+
+
+### AFR. 
+
+```{r, include = F}
+all.dvs <- all.dvs
+ndvbrain.pgs <- colnames(select(master, z.NDVAFR02.prscs.pgs, contains('z.NDVAFR02_M')))
+row.names=pullModNum(x = ndvbrain.pgs, first = "FG-NDV")
+col.names = substr(all.dvs, start = 1, stop = 15)
+
+ndvbrainspan.afr <- loopModThroughVars(dvs = all.dvs, ivs = ndvbrain.pgs, rownames=row.names, colnames = col.names, covariates = covariates.simple, data = master, timeInteraction = F, tstat = T, silent = T)
+```
+
+```{r, echo = F}
+ndvtable <- makeIntoTable(ndvbrainspan.afr)
+ndvtable$pretty.table
+
+```
+
+
+
+# Figure 5 and Supplementary Figure 5
+
+### First figure 5
+```{r}
+library(viridis)
+
+
+viz.df <- data.frame("Module" = rep(c("WG", paste0("M", 1:18)), 12),
+                     "PGS" = c(rep("ADHDEUR", 19),
+                               rep("ADHDAMR", 19),
+                               rep("ADHDAFR", 19),
+                               rep("CPEUR", 19),
+                               rep("CPAMR", 19),
+                               rep("CPAFR", 19),
+                               rep("SCZEUR", 19),
+                               rep("SCZAMR", 19),
+                               rep("SCZAFR", 19),
+                               rep("NDVEUR", 19),
+                               rep("NDVAMR", 19),
+                               rep("NDVAFR", 19)),
+                     "tval" = c(adhdbrainspan.eur$teas$z.pqb,
+                                adhdbrainspan.amr$teas$z.pqb,
+                                adhdbrainspan.afr$teas$z.pqb,
+                                cpbrainspan.eur$teas$z.pqb,
+                                cpbrainspan.amr$teas$z.pqb,
+                                cpbrainspan.afr$teas$z.pqb,
+                                sczbrainspan.eur$teas$z.pqb,
+                                sczbrainspan.amr$teas$z.pqb,
+                                sczbrainspan.afr$teas$z.pqb,
+                                ndvbrainspan.eur$teas$z.pqb,
+                                ndvbrainspan.amr$teas$z.pqb,
+                                ndvbrainspan.afr$teas$z.pqb),
+                     "pval" = c(adhdbrainspan.eur$peas$z.pqb,
+                                adhdbrainspan.amr$peas$z.pqb,
+                                adhdbrainspan.afr$peas$z.pqb,
+                                cpbrainspan.eur$peas$z.pqb,
+                                cpbrainspan.amr$peas$z.pqb,
+                                cpbrainspan.afr$peas$z.pqb,
+                                sczbrainspan.eur$peas$z.pqb,
+                                sczbrainspan.amr$peas$z.pqb,
+                                sczbrainspan.afr$peas$z.pqb,
+                                ndvbrainspan.eur$peas$z.pqb,
+                                ndvbrainspan.amr$peas$z.pqb,
+                                ndvbrainspan.afr$peas$z.pqb),
+                     "beta" = c(adhdbrainspan.eur$betas$z.pqb,
+                                adhdbrainspan.amr$betas$z.pqb,
+                                adhdbrainspan.afr$betas$z.pqb,
+                                cpbrainspan.eur$betas$z.pqb,
+                                cpbrainspan.amr$betas$z.pqb,
+                                cpbrainspan.afr$betas$z.pqb,
+                                sczbrainspan.eur$betas$z.pqb,
+                                sczbrainspan.amr$betas$z.pqb,
+                                sczbrainspan.afr$betas$z.pqb,
+                                ndvbrainspan.eur$betas$z.pqb,
+                                ndvbrainspan.amr$betas$z.pqb,
+                                ndvbrainspan.afr$betas$z.pqb))
+
+viz.df$Module = factor(viz.df$Module, levels = c("WG", paste0("M", 1:18)))
+
+## Create FDR vector which is a bit tricky here because we don't want to include the WG models in the total test count
+fdr.vector = rep(NA, 19*12)
+toBeAdjusted = viz.df$pval[-seq(1,(19*12), 19)]
+fdr.vector[-seq(1,(19*12), 19)] = p.adjust(toBeAdjusted, method = 'fdr')
+
+viz.df$fdr = fdr.vector
+
+# Get order of modules from smallest to largest
+moduleOrder <- read.table("~/Documents/ple_attention/data/increasingModuleSize.txt", header=F)
+
+viz.df$Module = factor(viz.df$Module, levels = c(moduleOrder$V1, "WG"))
+
+euonly <- viz.df[which(grepl("EUR", viz.df$PGS)), ]
+
+euonly$beta.paste = ifelse(euonly$fdr < 0.05 | is.na(euonly$fdr), round(euonly$beta, 3), "")
+
+adhdm5 <- which(euonly$Module == "M5" & euonly$PGS == "ADHDEUR")
+euonly$beta.paste[adhdm5] = paste0(euonly$beta.paste[adhdm5], "*")
+
+
+
+knitr::asis_output("EUR only")
+  
+euonly$PGS = case_match(euonly$PGS,
+                        "ADHDEUR" ~ "ADHD",
+                        "NDVEUR" ~ "Neurodev",
+                        "SCZEUR" ~ "SCZ",
+                        "CPEUR" ~ "Cognition")
+euonly$PGS = factor(euonly$PGS, levels = c("ADHD","Neurodev","SCZ","Cognition"))
+
+### Figure 5
+ggplot(euonly, aes(x = PGS, y = Module, fill = beta)) +
+  geom_tile() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5), text = element_text(family = "Times New Roman")) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000") +
+  geom_text(aes(label = beta.paste), color = 'black', size = 3.5, family = "Times New Roman", fontface = "bold") +
+  guides(fill = guide_legend(title = "ß")) +
+  geom_hline(yintercept = 18.5, color = "white", size = 2)
+
+############################################ Figure 5 ^
+
+
+asis_output("All ancestries")
+
+viz.df$beta.paste = ifelse(viz.df$fdr < 0.05, 
+                           paste0(round(viz.df$beta, 3)), NA)
+
+# viz.df$PGS = case_match(viz.df$PGS,
+#                     "ADHDEUR" ~ "ADHD (EUR)",
+#                     "ADHDAMR" ~ "ADHD (AMR)",
+#                     "ADHDAFR" ~ "ADHD (AFR)",
+#                     "NDVEUR" ~ "Neurodev (EUR)",
+#                     "NDVAMR" ~ "Neurodev (AMR)",
+#                     "NDVAFR" ~ "Neurodev (AFR)",
+#                     "SCZEUR" ~ "SCZ (EUR)",
+#                     "SCZAMR" ~ "SCZ (AMR)",
+#                     "SCZAFR" ~ "SCZ (AFR)",
+#                     "CPEUR" ~ "Cognition (EUR)",
+#                     "CPAMR" ~ "Cognition (AMR)",
+#                     "CPAFR" ~ "Cognition (AFR)")
+# 
+# viz.df$PGS = factor(viz.df$PGS, levels = c("ADHD (EUR)","Neurodev (EUR)","SCZ (EUR)","Cognition (EUR)",
+#                                            "ADHD (AMR)","Neurodev (AMR)","SCZ (AMR)","Cognition (AMR)",
+#                                            "ADHD (AFR)","Neurodev (AFR)","SCZ (AFR)","Cognition (AFR)"))
+
+viz.df$PGS = factor(viz.df$PGS, levels = c("ADHDEUR", "NDVEUR","SCZEUR","CPEUR",
+                                           "ADHDAMR","NDVAMR","SCZAMR","CPAMR",
+                                           "ADHDAFR","NDVAFR","SCZAFR","CPAFR"))
+
+## Supplementary Figure 5
+ggplot(viz.df, aes(x = PGS, y = Module, fill = beta)) +
+  geom_tile() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1.1), text = element_text(family = "Times New Roman")) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank()) +
+  #scale_fill_viridis(discrete = F) +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000") +
+  geom_vline(xintercept = 4.5, color = "white", size = 1) +
+  geom_vline(xintercept = 8.5, color = "white", size = 1) +
+  geom_hline(yintercept = 18.5, color = "white", size = 1) +
+  #geom_text(aes(label = beta.paste), color = 'white', size = 3, family = "Times New Roman", fontface = "bold") +
+  guides(fill = guide_legend(title = "ß")) +
+  scale_x_discrete(breaks = c("ADHDEUR", "NDVEUR", "SCZEUR", "CPEUR",
+                              "ADHDAMR","NDVAMR","SCZAMR","CPAMR",
+                              "ADHDAFR","NDVAFR", "SCZAFR", "CPAFR"),
+                   labels = c("ADHD","Neurodev","SCZ","Cognition",
+                                           "ADHD","Neurodev","SCZ","Cognition",
+                                           "ADHD","Neurodev","SCZ","Cognition"))
+################################################## ^ Supplementary Figure 5
+
+```
+
+# Correlate SNP counts with effect sizes (Supplementary Figure 2)
+
+```{r}
+adhdeur.snpcounts <- read.csv('~/Documents/abcd/genetics/PGS/ADHD/EUR/ADHDEUR_Brainspan_SNPcounts.csv', header=T)
+cpeur.snpcounts <- read.csv('~/Documents/abcd/genetics/PGS/CP/EUR/CPEUR_Brainspan_SNPcounts.csv', header=T)
+sczeur.snpcounts <- read.csv('~/Documents/abcd/genetics/PGS/SCZ/EUR/SCZEUR_Brainspan_SNPcounts.csv', header=T)
+ndv_snpcounts <- read.csv('~/Documents/abcd/genetics/PGS/NDV/EUR/NDVEUR_Brainspan_SNPcounts.csv', header=T)
+
+euonly.nowg = euonly %>%
+  filter(Module != "WG")
+euonly.nowg$snpcount <- c(adhdeur.snpcounts$V2, cpeur.snpcounts$V2, sczeur.snpcounts$V2, ndv_snpcounts$V2)
+euonly.nowg$abs.beta = abs(euonly.nowg$beta)
+euonly.nowg$pgsonly = sub("EUR", "", euonly.nowg$PGS)
+
+
+## SUPP FIG 2
+ggplot(euonly.nowg, aes(x = snpcount/1000, y = abs.beta)) + 
+  geom_point(aes(color = pgsonly)) + 
+  geom_smooth(method = 'lm', se = F) +
+  geom_text(x = 112.5, y = 0.035, 
+            label = paste0("r = ", round(cor(euonly.nowg$snpcount, euonly.nowg$abs.beta), 2))) +
+  ylab("Absolute Value of Standardized Beta") +
+  xlab("Size of Module in SNPs (1000s)") +
+  guides(color = guide_legend(title = "PGS"))
+###########################################################
+
+cor.test(euonly.nowg$snpcount, euonly.nowg$abs.beta)
+
+mean.betas <- aggregate(abs.beta ~ Module, data = euonly.nowg, FUN = mean)
+mean.snpcounts <- aggregate(snpcount ~ Module, data = euonly.nowg, FUN = mean)
+
+means.df <- left_join(mean.betas, mean.snpcounts)
+
+euonly.nowg.arranged <- means.df %>%
+  arrange(snpcount)
+
+euonly.nowg.arranged$Module = factor(euonly.nowg.arranged$Module, levels = as.character(unique(euonly.nowg.arranged$Module)))
+```
+
+<hr style="border: 3pt dotted black;">
+
+
+
+
+
+# Correlation matrices 
+
+```{r, echo = F}
+
+
+
+
+cp <- master[,c('z.cp.prscs.pgs',cpbrain.pgs)]
+adhd <- master[,c('z.adhd.prscs.pgs',adhdbrain.pgs)]
+scz <- master[,c('z.scz.eur.prscs.pgs',sczbrain.pgs)]
+
+getPmat <- function(x, y=NULL) {
+  
+  if (is.null(y)) {
+    pmat = as.data.frame(matrix(ncol = ncol(x), nrow = ncol(x)))
+    
+    for (i in c(1:ncol(x))) {
+      a=1
+      while (a <= ncol(x)) {
+        pmat[a,i] = cor.test(x[,i], x[,a], use = 'complete.obs')$p.value
+        a=a+1
+      }
+    }
+  } else {
+    pmat = as.data.frame(matrix(ncol = ncol(x), nrow = ncol(y)))
+  
+    for (i in c(1:ncol(x))) {
+      for (a in c(1:ncol(y))) {
+        pmat[i,a] = cor.test(x[,i], y[,i], use = 'complete.obs')$p.value
+      }
+    }  
+  }
+  return(pmat)
+}
+```
+
+## Full genome PGS
+```{r, echo = F}
+fullspec <- c('z.adhd.prscs.pgs','z.cp.prscs.pgs','z.scz.eur.prscs.pgs')
+fullspec.data <- master[,fullspec]
+
+fullspec.corrmat <- cor(fullspec.data, use = 'complete.obs')
+rownames(fullspec.corrmat) = c('ADHD','CP','SCZEUR')
+colnames(fullspec.corrmat) = rownames(fullspec.corrmat)
+
+fullspec.pmat <- getPmat(fullspec.data)
+corrplot(fullspec.corrmat, col.lim = range(fullspec.corrmat), method = 'ellipse', addCoef.col = T)
+```
+
+
+## Brainspan Modules
+Horizontal and vertical lines are just to more explicitly separate full-genome PGS from brainspan PGS. Colors represent strength of Pearson's correlation coefficient. Really interesting that CPxSCZ brainspan modules are noticeably more strongly correlated than CPxSCZ full-genome and CPxADHD brainspan. 
+
+### CP by ADHD
+
+```{r, echo = F}
+cp.adhd <- cor(cp, adhd, use = 'complete.obs')
+rownames(cp.adhd) = c('CP.FG', paste0('CP.M', 1:18))
+colnames(cp.adhd) = c('ADHD.FG',paste0('ADHD.M', 1:18))
+
+corrplot(cp.adhd, col.lim = range(cp.adhd), method = 'color')
+abline(v=1.5, lwd = 1.5)
+abline(h=18.5, lwd = 1.5)
+```
+
+### CP by SCZ
+```{r, echo = F}
+cp.scz <- cor(cp, scz, use = 'complete.obs')
+rownames(cp.scz) = c('CP.FG',paste0('CP.M', 1:18))
+colnames(cp.scz) = c('SCZEUR.FG',paste0('SCZEU.M', 1:18))
+
+corrplot(cp.scz, col.lim = range(cp.scz), method = 'color')
+abline(v=1.5, lwd = 1.5)
+abline(h=18.5, lwd = 1.5)
+```
+
+### ADHD by SCZ
+```{r, echo = F}
+adhd.scz <- cor(adhd, scz, use = 'complete.obs')
+rownames(adhd.scz) = c('ADHD.FG',paste0('ADHD.M', 1:18))
+colnames(adhd.scz) = c('SCZEUR.FG',paste0('SCZEU.M', 1:18))
+
+corrplot(adhd.scz, col.lim = range(adhd.scz), method = 'color') 
+abline(v=1.5, lwd = 1.5)
+abline(h=18.5, lwd = 1.5)
+```
+
+<hr style="border: 3pt dotted black;">
+
