@@ -6,9 +6,9 @@ Home to the scripts used to shuffle SNP effects and generate permuted, null dist
 > 1. Say we test a schizophrenia polygenic score and find that there is a significant relationship between this score (a whole-genome score) and an outcome of interest
 > 2. Now lets say we are interested in partitioning that whole-genome schizophrenia score by a set of 100 genes
 > 3. Each gene consists of 10 SNPs and let's pretend we have information (effect sizes) about each SNPs effect on schizophrenia diagnosis from a GWAS
-> 4. Therefore, our polygenic score would represent the sum of SNP effects across 10,000 SNPs (100 genes x 10 SNPs/gene)
+> 4. Therefore, our polygenic score would represent the sum of SNP effects across 1,000 SNPs (100 genes x 10 SNPs/gene)
 > 5. If we find that our partitioned score significantly associates with our outcome of interest, how do we know if we are finding this association because we are just sampling a large number of SNPs from a whole-genome score which associates significantly with our outcome?
-> 6. Our question is "Does this set of 100 genes play a unique role in the whole-genome signal we're seeing?" and NOT "Does a random selection of 10,000 SNPs from the whole-genome signal we're seeing also associate with our outcome?"
+> 6. Our question is "Does this set of 100 genes play a unique role in the whole-genome signal we're seeing?" and NOT "Does a random selection of 1,000 SNPs from the whole-genome signal we're seeing also associate with our outcome?"
 > 7. Excitingly, this is a super testable distinction to make. How do we do it?
 > 8. Permutations! woo!
 
