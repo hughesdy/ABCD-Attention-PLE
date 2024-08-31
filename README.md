@@ -1,7 +1,7 @@
 =======
 A special thanks to Jinhan Zhu and Sarah E. Chang for contributing to these pipelines.
 
-## pPGS-permutation/
+## pPGS-permutation-pipeline/
 Home to the scripts used to shuffle SNP effects and generate permuted, null distributions against which observed effects (of a polygenic score partitioned by a theoretically meaningful set of SNPs) can be compared. See folder for more information about the specific scripts. Here's a brief attempt at describing the importance of permutations: 
 > 1. Say we test a schizophrenia polygenic score and find that there is a significant relationship between this score (a whole-genome score) and an outcome of interest
 > 2. Now lets say we are interested in partitioning that whole-genome schizophrenia score by a set of 100 genes
