@@ -3,14 +3,14 @@ A special thanks to Jinhan Zhu and Sarah E. Chang for contributing to these pipe
 
 ## pPGS-permutation/
 Home to the scripts used to shuffle SNP effects and generate permuted, null distributions against which observed effects (of a polygenic score partitioned by a theoretically meaningful set of SNPs) can be compared. See folder for more information about the specific scripts. Here's a brief attempt at describing the importance of permutations: 
-> say we test a schizophrenia polygenic score and find that there is a significant relationship between this score (a whole-genome score) and an outcome of interest
-> now lets say we are interested in partitioning that whole-genome schizophrenia score by a set of 100 genes
-> Each gene consists of 10 SNPs and let's pretend we have information (effect sizes) about each SNPs effect on schizophrenia diagnosis from a GWAS
-> Therefore, our polygenic score would represent the sum of SNP effects across 10,000 SNPs (100 genes x 10 SNPs/gene)
-> If we find that our partitioned score significantly associates with our outcome of interest, how do we know if we are finding this association because we are just sampling a large number of SNPs from a whole-genome score which associates significantly with our outcome?
-> Our question is "Does this set of 100 genes play a unique role in the whole-genome signal we're seeing?" and NOT "Does a random selection of 10,000 SNPs from the whole-genome signal we're seeing also associate with our outcome?"
-> Excitingly, this is a super testable distinction to make. How do we do it?
-> Permutations! woo!
+> * say we test a schizophrenia polygenic score and find that there is a significant relationship between this score (a whole-genome score) and an outcome of interest
+> * now lets say we are interested in partitioning that whole-genome schizophrenia score by a set of 100 genes
+> * Each gene consists of 10 SNPs and let's pretend we have information (effect sizes) about each SNPs effect on schizophrenia diagnosis from a GWAS
+> * Therefore, our polygenic score would represent the sum of SNP effects across 10,000 SNPs (100 genes x 10 SNPs/gene)
+> * If we find that our partitioned score significantly associates with our outcome of interest, how do we know if we are finding this association because we are just sampling a large number of SNPs from a whole-genome score which associates significantly with our outcome?
+> * Our question is "Does this set of 100 genes play a unique role in the whole-genome signal we're seeing?" and NOT "Does a random selection of 10,000 SNPs from the whole-genome signal we're seeing also associate with our outcome?"
+> * Excitingly, this is a super testable distinction to make. How do we do it?
+> * Permutations! woo!
 
 ## Brainspan-pPGS-final.rmd
 This markdown file contains many of the main polygenic score analyses from the project. Specifically, it contains models regressing our measures of psychotic-like experiences (i.e., PQ-BC) and attention (intra-individual variability) on whole-genome polygenic scores as well as polygenic scores partitioned by developmentally co-expressed modules of genes. It also generates Table 3, Figure 5, and Supplementary Figures 2 and 5 from the paper.
